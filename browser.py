@@ -37,17 +37,20 @@ class URL:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
 
+        self.sockets = {}
+
     def internet_request(self, headers=[]):
         # using the given url, make an http request to it
-        s = socket.socket(
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP,
-        )
-        s.connect((self.host, self.port))
-        if self.scheme == "https":
-            ctx = ssl.create_default_context(cafile=certifi.where())
-            s = ctx.wrap_socket(s, server_hostname=self.host)
+
+        # First check that a cached socket exists
+        if self.host in self.sockets:
+            s = self.sockets[self.host]
+        else:
+            s = socket.socket(
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
 
         # Every piece of this is relevant to the HTTP format
         request = "GET {} HTTP/1.1\r\n".format(self.path)
@@ -61,18 +64,32 @@ class URL:
         request += "\r\n"
 
         # turn the string into bytes, request needs to be in bytes
-        s.send(request.encode("utf8"))
+        # try/catch in case cached socket is now stale
+        try:
+            s.send(request.encode("utf8"))
+        except OSError:
+            s = socket.socket(
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
+            s.connect((self.host, self.port))
+            if self.scheme == "https":
+                ctx = ssl.create_default_context(cafile=certifi.where())
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+            s.send(request.encode("utf8"))
+        
 
         # Turn the response into a file-like object
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
+        response = s.makefile("rb", encoding="utf8", newline="\r\n")
 
         # Decompose response
-        statusline = response.readline()
+        statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
 
         response_headers = {}
         while True:
-            line = response.readline()
+            line = response.readline().decode("utf8")
             if line == "\r\n": break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
@@ -80,8 +97,8 @@ class URL:
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
 
-        content = response.read(int(response_headers["content-length"]))
-        s.close()
+        content = response.read(int(response_headers["content-length"])).decode("utf8")
+        self.sockets[self.host] = s
 
         if (self.viewSource):
             content = "view-source:" + content
