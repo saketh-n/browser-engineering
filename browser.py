@@ -5,6 +5,10 @@ import os
 
 class URL:
     def __init__(self, url):
+        self.parse_url(url)
+        self.sockets = {}
+
+    def parse_url(self, url):
         # Special Case, handling data urls
         dataScheme = "data:text/html"
         if url.startswith(dataScheme):
@@ -37,9 +41,7 @@ class URL:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
 
-        self.sockets = {}
-
-    def internet_request(self, headers=[]):
+    def internet_request(self, headers=[], redirect_limit=4):
         # using the given url, make an http request to it
 
         # First check that a cached socket exists
@@ -93,6 +95,17 @@ class URL:
             if line == "\r\n": break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
+
+        if status.startswith("3") and redirect_limit > 0:
+            # redirect request
+            # get location header
+            redirect_url = response_headers["location"]
+            # check if it's justa local redirect
+            if redirect_url.startswith("/"):
+                self.path = redirect_url
+            else:
+                self.parse_url(redirect_url)
+            return self.internet_request(redirect_limit = redirect_limit - 1)
 
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
